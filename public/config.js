@@ -45,6 +45,8 @@ export const EMBED_TIKTOK = true;
 // Bot protection (Firebase App Check with reCAPTCHA v3). Paste your reCAPTCHA
 // v3 SITE key here (SECURITY.md, step 2). Leave as is to switch it off.
 export const RECAPTCHA_SITE_KEY = "6LeQXhsuAAAAAHKU2ikGHGQYajJ06FvV0CA7Kqr4";
+// "enterprise" = App Check registered with Fraud Defense (reCAPTCHA Enterprise); "v3" = reCAPTCHA Classic
+export const RECAPTCHA_PROVIDER = "enterprise";
 
 // Log members out automatically after this many idle minutes (0 = never)
 export const IDLE_LOGOUT_MINUTES = 120;

@@ -3,7 +3,7 @@ const { firebaseConfig, OWNER_EMAIL, PLATFORM_NAME, OWNER_PHONE, FREE_POSTS_PER_
 const MIDDLEMAN_ON = CFG.MIDDLEMAN_ENABLED !== false, FEE_PCT = Number(CFG.MIDDLEMAN_FEE_PERCENT ?? 2), FEE_MIN = Number(CFG.MIDDLEMAN_FEE_MIN ?? 2000), EMBED_VIDEO = CFG.EMBED_TIKTOK !== false;
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/13.2.0/firebase-app.js';
 import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut, createUserWithEmailAndPassword, sendPasswordResetEmail, sendEmailVerification, reload } from 'https://www.gstatic.com/firebasejs/13.2.0/firebase-auth.js';
-import { initializeAppCheck, ReCaptchaV3Provider } from 'https://www.gstatic.com/firebasejs/13.2.0/firebase-app-check.js';
+import { initializeAppCheck, ReCaptchaV3Provider, ReCaptchaEnterpriseProvider } from 'https://www.gstatic.com/firebasejs/13.2.0/firebase-app-check.js';
 import { getFirestore, collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot, query, where, orderBy, limit, getDoc, getDocs, writeBatch } from 'https://www.gstatic.com/firebasejs/13.2.0/firebase-firestore.js';
 
 // ================= helpers =================
@@ -136,7 +136,7 @@ if (!firebaseConfig.apiKey || firebaseConfig.apiKey.includes('PASTE')) {
 const fbApp = initializeApp(firebaseConfig);
 // App Check: only your real website (with a valid reCAPTCHA token) can reach the database
 const APP_CHECK_ON = !!(CFG.RECAPTCHA_SITE_KEY && !String(CFG.RECAPTCHA_SITE_KEY).includes('PASTE'));
-if (APP_CHECK_ON) { try { initializeAppCheck(fbApp, {provider: new ReCaptchaV3Provider(CFG.RECAPTCHA_SITE_KEY), isTokenAutoRefreshEnabled: true}); } catch (e) { console.error('App Check', e); } }
+if (APP_CHECK_ON) { try { initializeAppCheck(fbApp, {provider: new (CFG.RECAPTCHA_PROVIDER === 'v3' ? ReCaptchaV3Provider : ReCaptchaEnterpriseProvider)(CFG.RECAPTCHA_SITE_KEY), isTokenAutoRefreshEnabled: true}); } catch (e) { console.error('App Check', e); } }
 const auth = getAuth(fbApp);
 const db = getFirestore(fbApp);
 

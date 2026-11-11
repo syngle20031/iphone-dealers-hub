@@ -2,7 +2,7 @@ import * as CFG from './config.js';
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/13.2.0/firebase-app.js';
 import { getAuth, onAuthStateChanged, signInAnonymously } from 'https://www.gstatic.com/firebasejs/13.2.0/firebase-auth.js';
 import { getFirestore, collection, doc, onSnapshot, query, where, orderBy, limit, startAfter, getDocs, getDoc, writeBatch, updateDoc } from 'https://www.gstatic.com/firebasejs/13.2.0/firebase-firestore.js';
-import { initializeAppCheck, ReCaptchaV3Provider } from 'https://www.gstatic.com/firebasejs/13.2.0/firebase-app-check.js';
+import { initializeAppCheck, ReCaptchaV3Provider, ReCaptchaEnterpriseProvider } from 'https://www.gstatic.com/firebasejs/13.2.0/firebase-app-check.js';
 
 // ================= setup =================
 const ROOT = document.getElementById('sroot');
@@ -32,7 +32,7 @@ if (!CFG.firebaseConfig?.apiKey || String(CFG.firebaseConfig.apiKey).includes('P
 }
 const fbApp = initializeApp(CFG.firebaseConfig, 'store');
 if (CFG.RECAPTCHA_SITE_KEY && !String(CFG.RECAPTCHA_SITE_KEY).includes('PASTE')) {
-  try { initializeAppCheck(fbApp, {provider: new ReCaptchaV3Provider(CFG.RECAPTCHA_SITE_KEY), isTokenAutoRefreshEnabled: true}); } catch (e) { console.error(e); }
+  try { initializeAppCheck(fbApp, {provider: new (CFG.RECAPTCHA_PROVIDER === 'v3' ? ReCaptchaV3Provider : ReCaptchaEnterpriseProvider)(CFG.RECAPTCHA_SITE_KEY), isTokenAutoRefreshEnabled: true}); } catch (e) { console.error(e); }
 }
 const auth = getAuth(fbApp), db = getFirestore(fbApp);
 
