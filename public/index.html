@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#14201A">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'; upgrade-insecure-requests">
+<link rel="icon" href="logo-mark.svg" type="image/svg+xml">
+<link rel="icon" href="favicon-48.png" sizes="48x48">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<meta name="description" content="Buy verified iPhones with buyer protection, or run your phone business as a dealer.">
+<title>Welcome</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Figtree:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+#lp{--ink:#14201A;--mute:#5E6B64;--paper:#EEF1EC;--card:#fff;--line:#D9DFD8;--green:#0B5D3B;--hot:#F2541B;
+  --disp:'Bricolage Grotesque',Figtree,system-ui,sans-serif;--body:Figtree,system-ui,-apple-system,sans-serif;
+  min-height:100vh;min-height:100dvh;background:var(--paper);color:var(--ink);font-family:var(--body);display:flex;flex-direction:column;
+  padding:calc(env(safe-area-inset-top) + 34px) 18px calc(env(safe-area-inset-bottom) + 18px);box-sizing:border-box}
+@media (prefers-color-scheme:dark){#lp{--ink:#EAF0EC;--mute:#93A39A;--paper:#0F1613;--card:#17201C;--line:#26322C}}
+#lp *{box-sizing:border-box}
+.lp-in{width:100%;max-width:520px;margin:0 auto;flex:1;display:flex;flex-direction:column}
+.lp-brand{font-family:var(--disp);font-weight:800;font-size:clamp(34px,10vw,52px);line-height:.98;letter-spacing:-.04em;margin:0}
+.lp-sub{color:var(--mute);font-size:16px;margin:12px 0 28px;max-width:30ch;line-height:1.45}
+.lp-q{font-family:var(--disp);font-weight:700;font-size:15px;color:var(--mute);margin:0 2px 10px}
+.lp-choice{display:block;width:100%;text-align:left;border:0;border-radius:22px;padding:20px 20px 18px;margin-bottom:12px;cursor:pointer;text-decoration:none;position:relative;overflow:hidden;font:inherit;transition:transform .12s ease}
+.lp-choice:active{transform:scale(.985)}
+.lp-choice:focus-visible{outline:3px solid var(--ink);outline-offset:3px}
+.lp-choice b{display:block;font-family:var(--disp);font-weight:800;font-size:26px;letter-spacing:-.03em;line-height:1.05}
+.lp-choice span{display:block;font-size:14.5px;margin-top:6px;opacity:.88;max-width:32ch;line-height:1.4}
+.lp-choice i{position:absolute;right:18px;top:50%;transform:translateY(-50%);font-style:normal;font-size:30px;font-weight:700;opacity:.9}
+.lp-cust{background:var(--hot);color:#fff}
+.lp-vend{background:var(--green);color:#F2F7F3}
+.lp-vend::after{content:'';position:absolute;inset:0;background:repeating-linear-gradient(135deg,rgba(255,255,255,.04) 0 2px,transparent 2px 9px);pointer-events:none}
+.lp-tags{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}
+.lp-tags em{font-style:normal;font-size:12px;font-weight:700;padding:4px 9px;border-radius:99px;background:rgba(255,255,255,.18)}
+.lp-remember{display:flex;gap:10px;align-items:center;font-size:14px;color:var(--mute);margin:6px 2px 0;cursor:pointer}
+.lp-remember input{width:19px;height:19px;accent-color:var(--green)}
+.lp-logo{display:block;width:72px;height:72px;margin:0 0 18px}
+.lp-foot{text-align:center;color:var(--mute);font-size:12px;margin-top:auto;padding-top:28px}
+.lp-foot b{font-family:var(--disp);color:var(--ink)}
+</style>
+</head>
+<body>
+<div id="lp"><div class="lp-in">
+  <img class="lp-logo" src="logo-mark.svg" width="72" height="72" alt="">
+  <h1 class="lp-brand" id="lp-name">iPhone Dealers Hub</h1>
+  <p class="lp-sub">Verified iPhones from trusted Nigerian dealers, and the tools those dealers run their business on.</p>
+  <p class="lp-q">How do you want to continue?</p>
+  <a class="lp-choice lp-cust" id="lp-cust" href="store.html" data-choice="customer"><b>I'm a customer</b><span>Shop iPhones. Your money is held safely until you receive your phone.</span><div class="lp-tags"><em>No account needed</em><em>Buyer protection</em></div><i aria-hidden="true">→</i></a>
+  <a class="lp-choice lp-vend" id="lp-vend" href="hub.html" data-choice="vendor"><b>I'm a vendor</b><span>Dealers and shops: stock, deals with other dealers, broadcasts and your customer listings.</span><div class="lp-tags"><em>Approved shops only</em></div><i aria-hidden="true">→</i></a>
+  <label class="lp-remember"><input type="checkbox" id="lp-rem">Remember my choice on this phone</label>
+  <footer class="lp-foot">Powered by <b>Syngle</b> (M.A Haske)<div style="margin-top:8px"><a href="store.html#report" id="lp-report" data-report-link style="color:var(--mute);font-weight:600">Report a problem</a></div></footer>
+</div></div>
+<script type="module" src="./landing.js"></script>
+</body>
+</html>

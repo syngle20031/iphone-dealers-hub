@@ -1,0 +1,571 @@
+rules_version = '2';
+
+// ======================================================================
+//  iPhone Dealers Hub — security rules
+//
+//  EDIT BEFORE PUBLISHING:
+//   1) Owner email is set in ownerEmail() below (mabdussamad634@gmail.com).
+//      It must match OWNER_EMAIL in public/config.js.
+//   2) Free broadcast posts per day: freeLimit() below (default 2).
+//      Must match FREE_POSTS_PER_DAY in config.js.
+//   3) Middleman fee minimums (escrows section): 2% and at least 2000.
+//      Must match MIDDLEMAN_FEE_PERCENT / MIDDLEMAN_FEE_MIN in config.js.
+//
+//  What these rules protect:
+//   - Only approved shops with a VERIFIED email can read or write anything.
+//   - Each shop's stock is private to that shop.
+//   - Daily caps per member stop spam and flooding (posts, comments,
+//     reports, ratings, deals, middleman requests).
+//   - Every field is checked for type and size.
+//   - Owner lockdown switches: pause sign-ups and pause posting.
+// ======================================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------------- identity ----------------
+    function signedIn() { return request.auth != null; }
+    function uid() { return request.auth.uid; }
+    function verified() { return signedIn() && request.auth.token.email_verified == true; }
+    // customers in the public store use anonymous sign-in; they never count as members
+    function notAnon() { return signedIn() && request.auth.token.firebase.sign_in_provider != 'anonymous'; }
+    function ownerEmail() { return "mabdussamad634@gmail.com"; }
+    function isOwner() { return verified() && request.auth.token.email == ownerEmail(); }
+    function memberPath(id) { return /databases/$(database)/documents/members/$(id); }
+    function me() { return get(memberPath(uid())); }
+    function isActive() {
+      return isOwner() || (verified() && exists(memberPath(uid())) && me().data.status == 'active');
+    }
+    // day number in Lagos time (UTC+1); same formula as the app
+    function today() { return int((request.time.toMillis() + 3600000) / 86400000); }
+    function unlimited() {
+      return isOwner() || me().data.unlimited == true || me().data.premiumUntil >= today();
+    }
+
+    // ---------------- lockdown switches ----------------
+    function settingsPath() { return /databases/$(database)/documents/settings/platform; }
+    function switchOn(name) {
+      return !exists(settingsPath()) || get(settingsPath()).data.get(name, true) != false;
+    }
+
+    // ---------------- small validators ----------------
+    function str(v, max) { return v is string && v.size() <= max; }
+    function optStr(d, k, max) { return !(k in d) || str(d[k], max); }
+    function money(v) { return (v is int || v is float) && v >= 0 && v <= 1000000000; }
+    // [SEC-01] document IDs must be plain (stops HTML/script injection through IDs)
+    function idOk(i) { return i is string && i.matches('[A-Za-z0-9_-]{4,64}'); }
+    // [SEC-03] timestamps written by phones may not be in the future (stops "pinning" posts on top)
+    function notFuture(t) { return (t is int || t is float) && t <= request.time.toMillis() + 600000; }
+    // [SEC-04] history is append-only: old entries can't be changed, the new one is signed with the writer's uid
+    function histOk(a, b) {
+      return b.history is list
+        && b.history.size() == a.history.size() + 1
+        && b.history[0:a.history.size()] == a.history
+        && b.history[a.history.size()].uid == uid()
+        && str(b.history[a.history.size()].t, 400);
+    }
+    // the 36 states of Nigeria and the FCT (keep in step with app.js and store.js)
+    function stateOk(d) {
+      return !('state' in d) || d.state == '' || d.state in ['Abia', 'Adamawa', 'Akwa Ibom', 'Anambra', 'Bauchi', 'Bayelsa', 'Benue', 'Borno', 'Cross River', 'Delta', 'Ebonyi', 'Edo', 'Ekiti', 'Enugu', 'FCT (Abuja)', 'Gombe', 'Imo', 'Jigawa', 'Kaduna', 'Kano', 'Katsina', 'Kebbi', 'Kogi', 'Kwara', 'Lagos', 'Nasarawa', 'Niger', 'Ogun', 'Ondo', 'Osun', 'Oyo', 'Plateau', 'Rivers', 'Sokoto', 'Taraba', 'Yobe', 'Zamfara'];
+    }
+    // shop logo: a small square picture (under 40 KB) stored as text, or '' for none
+    function logoOk(v) {
+      return v is string && (v == '' || (v.size() < 40000 && v.matches('data:image/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+')));
+    }
+    function devOk(d) {
+      return d is map && d.keys().hasOnly(['model', 'storage', 'color', 'imei', 'condition', 'battery', 'parts', 'face'])
+        && optStr(d, 'parts', 200) && optStr(d, 'face', 60)
+        && optStr(d, 'model', 60) && optStr(d, 'storage', 10) && optStr(d, 'color', 40)
+        && optStr(d, 'imei', 30) && optStr(d, 'condition', 40) && optStr(d, 'battery', 4);
+    }
+
+    // ---------------- daily action caps (anti-spam / anti-flood) ----------------
+    // Every create of a capped item must, in the same batch, add 1 to
+    // limits/{uid}.<kind>. The counter can only go up during the day.
+    function limitPath() { return /databases/$(database)/documents/limits/$(uid()); }
+    function capOf(kind) {
+      return kind == 'comments' ? 150
+        : kind == 'reports' ? 10
+        : kind == 'ratings' ? 30
+        : kind == 'deals' ? 100
+        : kind == 'escrows' ? 20
+        : kind == 'sales' ? 60
+        : 0;
+    }
+    function bumped(kind) {
+      let after = getAfter(limitPath()).data;
+      let beforeCount = exists(limitPath()) && get(limitPath()).data.day == today()
+                          ? get(limitPath()).data.get(kind, 0) : 0;
+      return after.day == today() && after.get(kind, 0) == beforeCount + 1;
+    }
+    function capsOk(d) {
+      return d.keys().hasOnly(['day', 'comments', 'reports', 'ratings', 'deals', 'escrows', 'sales'])
+        && d.day == today()
+        && d.get('comments', 0) <= capOf('comments')
+        && d.get('reports', 0) <= capOf('reports')
+        && d.get('ratings', 0) <= capOf('ratings')
+        && d.get('deals', 0) <= capOf('deals')
+        && d.get('escrows', 0) <= capOf('escrows')
+        && d.get('sales', 0) <= capOf('sales');
+    }
+    function noDecrease(a, b) {
+      return a.day != today() || (
+        b.get('comments', 0) >= a.get('comments', 0)
+        && b.get('reports', 0) >= a.get('reports', 0)
+        && b.get('ratings', 0) >= a.get('ratings', 0)
+        && b.get('deals', 0) >= a.get('deals', 0)
+        && b.get('escrows', 0) >= a.get('escrows', 0)
+        && b.get('sales', 0) >= a.get('sales', 0));
+    }
+    match /limits/{memberId} {
+      allow read: if signedIn() && uid() == memberId;
+      allow create: if verified() && uid() == memberId && capsOk(request.resource.data);
+      allow update: if verified() && uid() == memberId && capsOk(request.resource.data)
+        && noDecrease(resource.data, request.resource.data);
+    }
+
+    // ---------------- platform settings (lockdown) ----------------
+    match /settings/{doc} {
+      allow read: if true;
+      // settings/options: the Parts and Face ID dropdown choices, edited by you in the hub
+      allow write: if isOwner() && doc == 'options'
+        && request.resource.data.keys().hasOnly(['partsOptions', 'faceOptions', 'updatedAt'])
+        && request.resource.data.partsOptions is list && request.resource.data.partsOptions.size() <= 30
+        && request.resource.data.faceOptions is list && request.resource.data.faceOptions.size() <= 10;
+      allow write: if isOwner() && doc == 'platform'
+        && request.resource.data.keys().hasOnly(['joinsOpen', 'postingOpen', 'storeOpen', 'updatedAt'])
+        && request.resource.data.joinsOpen is bool
+        && request.resource.data.postingOpen is bool
+        && request.resource.data.get('storeOpen', true) is bool;
+    }
+
+    // ---------------- members ----------------
+    function profileOk(d) {
+      return d.shopName is string && d.shopName.size() >= 2 && d.shopName.size() <= 60
+        && optStr(d, 'name', 60) && optStr(d, 'phone', 20) && optStr(d, 'address', 120)
+        && optStr(d, 'city', 60) && optStr(d, 'bio', 500) && optStr(d, 'tiktok', 200) && stateOk(d)
+        && (!('logo' in d) || logoOk(d.logo));
+    }
+    match /members/{memberId} {
+      // [SEC-07] members only see APPROVED shops; applicants' details are visible to you only
+      allow read: if signedIn() && (uid() == memberId || isOwner() || (isActive() && resource.data.status == 'active'));
+      // anyone signed in may APPLY (status pending); they still need a verified
+      // email and your approval before they can read or write anything else
+      allow create: if notAnon() && uid() == memberId
+        && profileOk(request.resource.data)
+        && request.resource.data.keys().hasOnly(['shopName', 'name', 'phone', 'address', 'city', 'state', 'bio', 'tiktok', 'logo', 'status', 'premiumUntil', 'unlimited', 'createdAt'])
+        && request.resource.data.unlimited == false
+        && request.resource.data.premiumUntil == 0
+        && request.resource.data.status == 'pending'
+        && (switchOn('joinsOpen') || request.auth.token.email == ownerEmail());
+      allow update: if isOwner() || (
+        verified() && uid() == memberId
+        && profileOk(request.resource.data)
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['name', 'phone', 'address', 'city', 'state', 'bio', 'tiktok', 'logo', 'updatedAt'])   // [SEC-06] shop name: only you can change it
+        && (!('updatedAt' in request.resource.data) || notFuture(request.resource.data.updatedAt))
+      );
+      allow delete: if isOwner();
+
+      // each member's own notification settings (only they can read or change them;
+      // the optional server code reads them with admin access to send alerts)
+      match /prefs/{prefId} {
+        allow read: if signedIn() && uid() == memberId;
+        allow write: if signedIn() && uid() == memberId && prefId == 'notify'
+          && request.resource.data.keys().hasOnly(['lastSeen', 'seenComments', 'newPosts', 'types', 'keywords', 'maxPrice', 'city', 'state', 'storeNew', 'deals', 'orders', 'escrows', 'reviews', 'comments', 'push', 'wa', 'tokens', 'updatedAt'])
+          && optStr(request.resource.data, 'keywords', 200)
+          && optStr(request.resource.data, 'city', 60) && stateOk(request.resource.data)
+          && (!('tokens' in request.resource.data) || (request.resource.data.tokens is list && request.resource.data.tokens.size() <= 10))
+          && (!('seenComments' in request.resource.data) || request.resource.data.seenComments.size() <= 300);
+      }
+
+      // each member's private stock: nobody else can read it, not even the owner
+      match /devices/{deviceId} {
+        allow read: if signedIn() && uid() == memberId;
+        allow write: if signedIn() && uid() == memberId && isActive() && idOk(deviceId);
+      }
+    }
+
+    // ---------------- deals between two members ----------------
+    // ownerId = owns the phone (gets paid); holderId = has the phone (pays)
+    function dealStatusOk(a, b, isHolder, mine) {
+      return a == b
+        || (a == 'pending'   && (b == 'active' || b == 'rejected') && !mine)
+        || (a == 'pending'   && b == 'cancelled' && mine)
+        || (a == 'active'    && (b == 'sold' || b == 'returning') && isHolder)
+        || (a == 'active'    && b == 'returned' && !isHolder)
+        || (a == 'returning' && (b == 'returned' || b == 'active') && !isHolder);
+    }
+    function dealUpdateOk() {
+      let a = resource.data;
+      let b = request.resource.data;
+      let keys = b.diff(a).affectedKeys();
+      let isHolder = uid() == a.holderId;
+      return keys.hasOnly(['status', 'history', 'claimedPaid', 'paid', 'updatedAt', 'soldInfo', 'soldAt', 'closedAt', 'due', 'deviceId'])
+        && (!keys.hasAny(['claimedPaid']) || (isHolder && money(b.claimedPaid) && b.claimedPaid <= a.price))
+        && (!keys.hasAny(['paid', 'due', 'deviceId']) || !isHolder)
+        && (!keys.hasAny(['paid']) || (money(b.paid) && b.paid <= a.price))
+        && b.history.size() <= 200 && histOk(a, b) && notFuture(b.updatedAt)
+        && (!keys.hasAny(['deviceId']) || idOk(b.deviceId))
+        && (!keys.hasAny(['soldInfo']) || (b.soldInfo is map && b.soldInfo.keys().hasOnly(['amount']) && money(b.soldInfo.get('amount', 0))))
+        && dealStatusOk(a.status, b.status, isHolder, a.createdBy == uid());
+    }
+    match /moves/{dealId} {
+      allow read: if signedIn() && uid() in resource.data.parties;
+      allow create: if isActive()
+        && idOk(dealId)
+        && request.resource.data.keys().hasOnly(['ownerId', 'holderId', 'parties', 'ownerName', 'holderName', 'deviceId', 'dev', 'price', 'dateOut', 'due', 'note', 'status', 'paid', 'claimedPaid', 'createdBy', 'createdAt', 'updatedAt', 'history'])
+        && devOk(request.resource.data.dev)
+        && str(request.resource.data.ownerName, 60) && str(request.resource.data.holderName, 60)
+        && optStr(request.resource.data, 'dateOut', 10) && optStr(request.resource.data, 'due', 10)
+        && (request.resource.data.deviceId == '' || idOk(request.resource.data.deviceId))
+        && notFuture(request.resource.data.createdAt) && notFuture(request.resource.data.updatedAt)
+        && (isOwner() || bumped('deals'))
+        && request.resource.data.createdBy == uid()
+        && request.resource.data.ownerId != request.resource.data.holderId
+        && request.resource.data.parties == [request.resource.data.ownerId, request.resource.data.holderId]
+        && uid() in request.resource.data.parties
+        && exists(memberPath(request.resource.data.ownerId))
+        && exists(memberPath(request.resource.data.holderId))
+        && request.resource.data.status == 'pending'
+        && request.resource.data.paid == 0
+        && request.resource.data.claimedPaid == 0
+        && money(request.resource.data.price)
+        && optStr(request.resource.data, 'note', 300)
+        && request.resource.data.history.size() <= 5;
+      allow update: if isActive()
+        && uid() in resource.data.parties
+        && request.resource.data.parties == resource.data.parties
+        && request.resource.data.ownerId == resource.data.ownerId
+        && request.resource.data.holderId == resource.data.holderId
+        && request.resource.data.createdBy == resource.data.createdBy
+        && request.resource.data.price == resource.data.price
+        && dealUpdateOk();
+      allow delete: if signedIn() && resource.data.createdBy == uid()
+        && resource.data.status in ['pending', 'cancelled', 'rejected'];
+    }
+
+    // ---------------- broadcast posts ----------------
+    function freeLimit() { return 2; }
+    function quotaPath() { return /databases/$(database)/documents/quota/$(uid()); }
+    match /posts/{postId} {
+      allow read: if isActive();
+      allow create: if isActive()
+        && idOk(postId)
+        && request.resource.data.keys().hasOnly(['authorId', 'shopName', 'phone', 'city', 'state', 'type', 'text', 'model', 'storage', 'condition', 'parts', 'face', 'price', 'status', 'commentCount', 'createdAt', 'photo', 'video'])
+        && optStr(request.resource.data, 'phone', 20) && optStr(request.resource.data, 'city', 60) && optStr(request.resource.data, 'storage', 10)
+        && notFuture(request.resource.data.createdAt)
+        && (isOwner() || switchOn('postingOpen'))
+        && request.resource.data.authorId == uid()
+        && request.resource.data.shopName == me().data.shopName
+        && request.resource.data.status == 'open'
+        && request.resource.data.commentCount == 0
+        && request.resource.data.type in ['sell', 'buy', 'swap', 'news']
+        && str(request.resource.data.text, 1000)
+        && optStr(request.resource.data, 'model', 60)
+        && optStr(request.resource.data, 'condition', 40) && optStr(request.resource.data, 'parts', 200) && optStr(request.resource.data, 'face', 60)
+        && stateOk(request.resource.data)
+        && money(request.resource.data.price)
+        && (!('photo' in request.resource.data) || (request.resource.data.photo is string
+             && request.resource.data.photo.size() < 260000
+             && request.resource.data.photo.matches('data:image/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+')))
+        && (!('video' in request.resource.data) || (request.resource.data.video is string
+             && request.resource.data.video.size() <= 300
+             && request.resource.data.video.matches('https://([a-z0-9-]+[.])?tiktok[.]com/[A-Za-z0-9@._/?=&%-]*')))
+        && (unlimited() || (
+             getAfter(quotaPath()).data.last == postId
+             && getAfter(quotaPath()).data.day == today()
+             && (!exists(quotaPath()) || get(quotaPath()).data.count != getAfter(quotaPath()).data.count || get(quotaPath()).data.day != today())
+           ));
+      allow update: if isOwner()
+        || (isActive() && resource.data.authorId == uid()
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt'])
+            && request.resource.data.status in ['open', 'sold']
+            && notFuture(request.resource.data.get('updatedAt', 0)))
+        || (isActive()
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['commentCount'])
+            && (request.resource.data.commentCount == resource.data.commentCount + 1
+                || request.resource.data.commentCount == resource.data.commentCount - 1));
+      allow delete: if signedIn() && (resource.data.authorId == uid() || isOwner());
+
+      match /comments/{commentId} {
+        allow read: if isActive();
+        allow create: if isActive()
+          && idOk(commentId)
+          && request.resource.data.keys().hasOnly(['authorId', 'shopName', 'text', 'createdAt'])
+          && notFuture(request.resource.data.createdAt)
+          && (isOwner() || bumped('comments'))
+          && request.resource.data.authorId == uid()
+          && request.resource.data.shopName == me().data.shopName
+          && request.resource.data.text is string
+          && request.resource.data.text.size() > 0 && request.resource.data.text.size() <= 500;
+        allow delete: if signedIn() && (resource.data.authorId == uid() || isOwner()
+          || get(/databases/$(database)/documents/posts/$(postId)).data.authorId == uid());
+      }
+    }
+
+    // ---------------- daily post counter ----------------
+    match /quota/{memberId} {
+      allow read: if signedIn() && (uid() == memberId || isOwner());
+      allow create: if uid() == memberId && isActive()
+        && request.resource.data.keys().hasOnly(['day', 'count', 'last'])
+        && request.resource.data.day == today()
+        && request.resource.data.count == 1
+        && existsAfter(/databases/$(database)/documents/posts/$(request.resource.data.last))
+        && getAfter(/databases/$(database)/documents/posts/$(request.resource.data.last)).data.authorId == uid();
+      allow update: if uid() == memberId && isActive()
+        && request.resource.data.keys().hasOnly(['day', 'count', 'last'])
+        && request.resource.data.day == today()
+        && request.resource.data.count == (resource.data.day != today() ? 1 : resource.data.count + 1)
+        && (request.resource.data.count <= freeLimit() || unlimited())
+        && existsAfter(/databases/$(database)/documents/posts/$(request.resource.data.last))
+        && getAfter(/databases/$(database)/documents/posts/$(request.resource.data.last)).data.authorId == uid();
+    }
+
+    // ---------------- ratings: one per member per shop ----------------
+    function ratingOk() {
+      let d = request.resource.data;
+      return d.keys().hasOnly(['vendorId', 'raterId', 'raterName', 'stars', 'text', 'createdAt', 'updatedAt'])
+        && notFuture(d.createdAt) && notFuture(d.updatedAt)
+        && d.raterId == uid()
+        && d.vendorId != uid()
+        && ratingId == d.vendorId + '_' + uid()
+        && d.stars is int && d.stars >= 1 && d.stars <= 5
+        && str(d.text, 300)
+        && d.raterName == me().data.shopName
+        && exists(memberPath(d.vendorId));
+    }
+    match /ratings/{ratingId} {
+      allow read: if true;   // star ratings also show in the public customer store
+      allow create: if isActive() && (isOwner() || bumped('ratings')) && ratingOk();
+      allow update: if isActive() && resource.data.raterId == uid() && ratingOk();
+      allow delete: if signedIn() && (resource.data.raterId == uid() || isOwner());
+    }
+
+    // ---------------- vendor reports: only the reporter and the owner can read ----------------
+    match /reports/{reportId} {
+      allow read: if signedIn() && (isOwner() || resource.data.reporterId == uid());
+      allow create: if isActive()
+        && idOk(reportId)
+        && request.resource.data.keys().hasOnly(['vendorId', 'reporterId', 'reporterName', 'reason', 'details', 'postId', 'status', 'createdAt'])
+        && str(request.resource.data.reporterName, 60) && optStr(request.resource.data, 'postId', 64)
+        && notFuture(request.resource.data.createdAt)
+        && (isOwner() || bumped('reports'))
+        && request.resource.data.reporterId == uid()
+        && request.resource.data.vendorId != uid()
+        && request.resource.data.status == 'open'
+        && request.resource.data.reason in ['scam', 'fake', 'nopay', 'noreturn', 'abuse', 'spam', 'other']
+        && str(request.resource.data.details, 1000)
+        && exists(memberPath(request.resource.data.vendorId));
+      allow update, delete: if isOwner();
+    }
+
+    // ---------------- middleman (escrow) deals ----------------
+    function escrowStepOk() {
+      let a = resource.data;
+      let b = request.resource.data;
+      let buyer = uid() == a.buyerId;
+      let seller = uid() == a.sellerId;
+      let x = a.status;
+      let y = b.status;
+      return b.diff(a).affectedKeys().hasOnly(['status', 'history', 'updatedAt', 'disputeReason'])
+        && optStr(b, 'disputeReason', 500)
+        && b.history.size() <= 100 && histOk(a, b) && notFuture(b.updatedAt)
+        && (x == y
+          || (x == 'requested' && (y == 'accepted' || y == 'declined') && seller)
+          || (x == 'requested' && y == 'cancelled' && buyer)
+          || (x == 'accepted' && y == 'cancelled' && (buyer || seller))
+          || (x == 'paid' && y == 'delivered' && seller)
+          || (x == 'delivered' && y == 'received' && buyer)
+          || ((x == 'paid' || x == 'delivered') && y == 'disputed' && (buyer || seller)));
+    }
+    match /escrows/{escrowId} {
+      allow read: if signedIn() && (isOwner() || uid() in resource.data.parties);
+      allow create: if isActive()
+        && idOk(escrowId)
+        && request.resource.data.keys().hasOnly(['buyerId', 'sellerId', 'parties', 'postId', 'item', 'amount', 'fee', 'note', 'status', 'createdAt', 'updatedAt', 'history'])
+        && optStr(request.resource.data, 'postId', 64) && request.resource.data.history.size() <= 2
+        && notFuture(request.resource.data.createdAt) && notFuture(request.resource.data.updatedAt)
+        && (isOwner() || bumped('escrows'))
+        && request.resource.data.buyerId == uid()
+        && request.resource.data.sellerId != uid()
+        && request.resource.data.parties == [uid(), request.resource.data.sellerId]
+        && request.resource.data.status == 'requested'
+        && money(request.resource.data.amount) && request.resource.data.amount > 0
+        && money(request.resource.data.fee)
+        && request.resource.data.fee >= 2000
+        && request.resource.data.fee >= request.resource.data.amount * 0.02 - 1
+        && str(request.resource.data.item, 120)
+        && optStr(request.resource.data, 'note', 300)
+        && exists(memberPath(request.resource.data.sellerId));
+      // the owner (middleman) confirms payments, releases money and settles disputes
+      allow update: if isOwner() || (isActive()
+        && uid() in resource.data.parties
+        && request.resource.data.parties == resource.data.parties
+        && escrowStepOk());
+      allow delete: if isOwner();
+    }
+
+    // ---------- "Recently sold": public feed of closed deals ----------
+    // Buyers are never named: customers show as "a customer in <city>", dealers as "a dealer".
+    match /sales/{saleId} {
+      allow read: if true;
+      allow create: if idOk(saleId)
+        && request.resource.data.keys().hasOnly(['sellerId', 'shopName', 'item', 'buyerType', 'buyerLabel', 'via', 'createdAt'])
+        && str(request.resource.data.item, 120) && request.resource.data.item.size() > 0
+        && request.resource.data.buyerType in ['customer', 'dealer']
+        && str(request.resource.data.buyerLabel, 60)
+        && request.resource.data.via in ['shop', 'store', 'deal']
+        && notFuture(request.resource.data.createdAt)
+        && (isOwner() || (isActive()
+              && request.resource.data.sellerId == uid()
+              && request.resource.data.shopName == me().data.shopName
+              && bumped('sales')));
+      allow delete: if isOwner() || (signedIn() && resource.data.sellerId == uid());
+    }
+
+    // ================= CUSTOMER STORE =================
+    // Store commission: set STORE_COMMISSION_PERCENT in config.js (you deduct
+    // it when paying the vendor).
+
+    // ---------- listings: phones vendors offer to customers ----------
+    function listingOk(d) {
+      return d.vendorId == uid()
+        && idOk(d.deviceId)
+        && notFuture(d.createdAt) && notFuture(d.updatedAt)
+        && d.shopName == me().data.shopName
+        && d.keys().hasOnly(['vendorId', 'deviceId', 'shopName', 'shopLogo', 'city', 'state', 'model', 'storage', 'color', 'condition', 'parts', 'face', 'battery', 'price', 'description', 'photo', 'video', 'status', 'createdAt', 'updatedAt'])
+        && str(d.model, 60) && d.model.size() > 0
+        && optStr(d, 'storage', 10) && optStr(d, 'color', 40) && optStr(d, 'condition', 40)
+        && optStr(d, 'battery', 4) && optStr(d, 'city', 60) && optStr(d, 'description', 1500)
+        && optStr(d, 'parts', 200) && optStr(d, 'face', 60) && stateOk(d)
+        && (!('shopLogo' in d) || logoOk(d.shopLogo))
+        && money(d.price) && d.price > 0
+        && d.status in ['live', 'hidden', 'sold']
+        && (!('photo' in d) || (d.photo is string && d.photo.size() < 260000
+             && d.photo.matches('data:image/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+')))
+        && (!('video' in d) || d.video == '' || (d.video is string && d.video.size() <= 300
+             && d.video.matches('https://([a-z0-9-]+[.])?tiktok[.]com/[A-Za-z0-9@._/?=&%-]*')));
+    }
+    match /listings/{listingId} {
+      // anyone may browse live listings; vendors see their own; you see all
+      allow read: if resource.data.status == 'live'
+        || (signedIn() && resource.data.vendorId == uid()) || isOwner();
+      allow create, update: if isActive()
+        && listingId == uid() + '_' + request.resource.data.deviceId
+        && listingOk(request.resource.data);
+      allow update: if isOwner();   // you can hide any listing
+      allow delete: if signedIn() && (resource.data.vendorId == uid() || isOwner());
+    }
+
+    // ---------- per-visitor daily caps: 5 orders and 5 site reports per day ----------
+    function custLimitPath() { return /databases/$(database)/documents/custlimits/$(uid()); }
+    function custBumped(kind) {
+      let before = exists(custLimitPath()) && get(custLimitPath()).data.day == today()
+                     ? get(custLimitPath()).data.get(kind, 0) : 0;
+      return getAfter(custLimitPath()).data.day == today()
+        && getAfter(custLimitPath()).data.get(kind, 0) == before + 1;
+    }
+    match /custlimits/{custId} {
+      allow read: if signedIn() && uid() == custId;
+      allow create, update: if signedIn() && uid() == custId
+        && request.resource.data.keys().hasOnly(['day', 'orders', 'reports'])
+        && request.resource.data.day == today()
+        && request.resource.data.get('orders', 0) is int && request.resource.data.get('orders', 0) <= 5
+        && request.resource.data.get('reports', 0) is int && request.resource.data.get('reports', 0) <= 5
+        && (resource == null || resource.data.day != today()
+            || (request.resource.data.get('orders', 0) >= resource.data.get('orders', 0)
+                && request.resource.data.get('reports', 0) >= resource.data.get('reports', 0)));
+    }
+
+    // ---------- "Report a problem" from anywhere on the site (customers too) ----------
+    match /feedback/{reportId} {
+      allow read: if isOwner() || (signedIn() && resource.data.reporterUid == uid());
+      allow create: if signedIn() && idOk(reportId) && notFuture(request.resource.data.createdAt)
+        && request.resource.data.keys().hasOnly(['reporterUid', 'from', 'category', 'subject', 'details', 'contact', 'page', 'status', 'createdAt'])
+        && request.resource.data.reporterUid == uid()
+        && request.resource.data.from in ['customer', 'vendor']
+        && request.resource.data.category in ['seller', 'listing', 'order', 'scam', 'website', 'other']
+        && request.resource.data.details is string
+        && request.resource.data.details.size() >= 5 && request.resource.data.details.size() <= 1000
+        && optStr(request.resource.data, 'subject', 120)
+        && optStr(request.resource.data, 'contact', 40)
+        && optStr(request.resource.data, 'page', 60)
+        && request.resource.data.status == 'open'
+        && (isOwner() || custBumped('reports'));
+      allow update, delete: if isOwner();
+    }
+
+    // ---------- orders from customers ----------
+    function listingDoc(id) { return get(/databases/$(database)/documents/listings/$(id)); }
+    function orderOk(d) {
+      let l = listingDoc(d.listingId);
+      // [SEC-02] name, phone and address live in orders/{id}/private/contact, not here
+      return d.keys().hasOnly(['listingId', 'vendorId', 'customerUid', 'item', 'amount', 'commission', 'photo', 'city', 'state', 'status', 'history', 'createdAt', 'updatedAt'])
+        && notFuture(d.createdAt) && notFuture(d.updatedAt)
+        && d.customerUid == uid()
+        && l.data.status == 'live'
+        && d.vendorId == l.data.vendorId
+        && d.vendorId != uid()
+        && d.amount == l.data.price
+        // [SEC-05] commission is fixed at STORE_COMMISSION_PERCENT (5%) — keep in step with config.js
+        && money(d.commission) && d.commission >= d.amount * 0.05 - 1 && d.commission <= d.amount * 0.05 + 1
+        && d.status == 'new'
+        && str(d.item, 120)
+        && str(d.city, 60) && d.city.size() > 0 && stateOk(d)
+        && (!('photo' in d) || d.photo == '')
+        && d.history.size() <= 2;
+    }
+    function orderStep(allowed) {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'history', 'updatedAt', 'problem'])
+        && optStr(request.resource.data, 'problem', 500)
+        && request.resource.data.history.size() <= 60
+        && histOk(resource.data, request.resource.data)
+        && notFuture(request.resource.data.updatedAt)
+        && allowed;
+    }
+    match /orders/{orderId} {
+      // the tracking link carries the order id (long and random): anyone with
+      // the link can open that one order, but nobody can list other people's orders
+      allow get: if true;
+      allow list: if isOwner()
+        || (signedIn() && (resource.data.vendorId == uid() || resource.data.customerUid == uid()));
+      allow create: if signedIn()
+        && idOk(orderId)
+        && (isOwner() || switchOn('storeOpen'))
+        && orderOk(request.resource.data)
+        && existsAfter(/databases/$(database)/documents/orders/$(orderId)/private/contact)
+        && custBumped('orders');
+      allow update: if isOwner()
+        // vendor: confirm it's available (or not), then mark delivered after payment
+        || (isActive() && resource.data.vendorId == uid() && orderStep(
+              (resource.data.status == 'new' && request.resource.data.status in ['accepted', 'rejected'])
+              || (resource.data.status == 'paid' && request.resource.data.status == 'delivered')))
+        // customer: cancel before paying, confirm delivery, or report a problem
+        || (signedIn() && resource.data.customerUid == uid() && orderStep(
+              (resource.data.status in ['new', 'accepted'] && request.resource.data.status == 'cancelled')
+              || (resource.data.status == 'delivered' && request.resource.data.status == 'received')
+              || (resource.data.status in ['paid', 'delivered'] && request.resource.data.status == 'disputed')));
+      allow delete: if isOwner();
+
+      // [SEC-02] customer's name, phone and address. Readable by the customer and you;
+      // the seller only sees it once the customer has paid.
+      match /private/{docId} {
+        function parent() { return get(/databases/$(database)/documents/orders/$(orderId)).data; }
+        allow create: if signedIn() && docId == 'contact'
+          && getAfter(/databases/$(database)/documents/orders/$(orderId)).data.customerUid == uid()
+          && request.resource.data.keys().hasOnly(['customerName', 'customerPhone', 'address', 'note'])
+          && request.resource.data.customerName is string && request.resource.data.customerName.size() >= 2 && request.resource.data.customerName.size() <= 60
+          && request.resource.data.customerPhone is string && request.resource.data.customerPhone.size() >= 7 && request.resource.data.customerPhone.size() <= 20
+          && str(request.resource.data.address, 200) && request.resource.data.address.size() >= 5
+          && optStr(request.resource.data, 'note', 300);
+        allow read: if isOwner()
+          || (signedIn() && parent().customerUid == uid())
+          || (isActive() && parent().vendorId == uid() && parent().status in ['paid', 'delivered', 'received', 'disputed', 'completed']);
+        allow update, delete: if isOwner();
+      }
+    }
+
+    // ---------------- everything else is denied ----------------
+  }
+}
