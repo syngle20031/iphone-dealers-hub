@@ -1,0 +1,35 @@
+# Deploys the site, security rules and database indexes to Firebase
+# every time something is pushed to the main branch.
+# Needs one repository secret: FIREBASE_SERVICE_ACCOUNT (the JSON key of a
+# Google Cloud service account for project dealers-hub-5c144). See DEPLOY-NOW.md.
+name: Deploy to Firebase
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: firebase-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Sign in to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+
+      - name: Deploy site, rules and indexes
+        run: npx --yes firebase-tools@14 deploy --only hosting,firestore --project dealers-hub-5c144 --non-interactive

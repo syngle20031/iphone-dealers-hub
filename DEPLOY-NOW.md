@@ -46,3 +46,8 @@ Upload the new zip and repeat steps 3 and 5.
 - Turn on **App Check** (reCAPTCHA v3) and paste the site key into `public/config.js`.
 - Restrict the API key to your web address in Google Cloud → Credentials.
 - Set a password policy in Firebase → Authentication → Settings.
+
+## Automatic deploys from GitHub
+The repository has a workflow (`.github/workflows/deploy.yml`) that deploys the site, rules and indexes
+whenever `main` changes. It needs a repository secret named `FIREBASE_SERVICE_ACCOUNT` holding the JSON key
+of the `github-deployer` service account. To run it by hand: GitHub → Actions → Deploy to Firebase → Run workflow.
